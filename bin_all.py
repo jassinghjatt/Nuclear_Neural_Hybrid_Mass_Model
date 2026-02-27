@@ -1,0 +1,205 @@
+# ============================================================
+# RESIDUAL BOOSTING FFNN (NO BINS, WITH MASKING)
+# SINGLE-GROUP SCRIPT VERSION
+# ============================================================
+
+import sys
+import numpy as np
+import pandas as pd
+import tensorflow as tf
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import mean_squared_error
+from math import sqrt
+import gc
+import os
+print("Process ID:", os.getpid())
+# ============================================================
+# READ GROUP NUMBER FROM TERMINAL
+# ============================================================
+
+TEST_GROUP = int(sys.argv[1])
+
+# ============================================================
+# SETTINGS
+# ============================================================
+
+SEED = 42
+np.random.seed(SEED)
+tf.random.set_seed(SEED)
+
+# GPU / Metal memory safety
+gpus = tf.config.experimental.list_physical_devices('GPU')
+for gpu in gpus:
+    tf.config.experimental.set_memory_growth(gpu, True)
+
+PLATEAU_EPOCHS = 10
+MAX_EPOCHS = 500
+
+os.makedirs("results_residual_ffnn_singlebin", exist_ok=True)
+
+print("\n" + "="*70)
+print(f"MAJOR RUN — TEST GROUP {TEST_GROUP}")
+print("="*70)
+
+# ============================================================
+# LOAD DATA
+# ============================================================
+
+df = pd.read_excel("A<121_nuclei_all.xlsx")
+groups_df = pd.read_excel("splits/random_22_groups.xlsx")
+df = df.merge(groups_df, on=["Z","N"], how="left")
+
+feature_cols = [
+    "Z","N","A",
+    "deltaM_local_mean","deltaM_local_var",
+    "S_n","S_p","S_2n","S_2p","E_bind",
+    "I","abs_I","I2_over_A","absI_over_A",
+    "pairing_class",
+    "dZ_magic","dN_magic","dZ2_magic","dN2_magic",
+    "N-Z",
+    "deltaM_local_mean_bous","deltaM_local_var_bous"
+]
+
+train_df = df[df["group"] != TEST_GROUP].copy()
+test_df  = df[df["group"] == TEST_GROUP].copy()
+
+scaler = StandardScaler()
+X_train = scaler.fit_transform(train_df[feature_cols].values)
+X_test  = scaler.transform(test_df[feature_cols].values)
+
+delta_train = train_df["deltaM"].values.copy()
+delta_test  = test_df["deltaM"].values.copy()
+
+# ============================================================
+# BUILD FFNN
+# ============================================================
+
+def build_ffnn(input_dim, l2_value):
+
+    inputs = tf.keras.Input(shape=(input_dim,))
+
+    x = tf.keras.layers.Dense(512, activation="relu",
+        kernel_regularizer=tf.keras.regularizers.l2(l2_value))(inputs)
+    x = tf.keras.layers.Dense(512, activation="relu",
+        kernel_regularizer=tf.keras.regularizers.l2(l2_value))(x)
+    x = tf.keras.layers.Dense(256, activation="relu",
+        kernel_regularizer=tf.keras.regularizers.l2(l2_value))(x)
+    x = tf.keras.layers.Dense(256, activation="relu",
+        kernel_regularizer=tf.keras.regularizers.l2(l2_value))(x)
+    x = tf.keras.layers.Dense(128, activation="relu",
+        kernel_regularizer=tf.keras.regularizers.l2(l2_value))(x)
+    x = tf.keras.layers.Dense(128, activation="relu",
+        kernel_regularizer=tf.keras.regularizers.l2(l2_value))(x)
+    x = tf.keras.layers.Dense(64, activation="relu",
+        kernel_regularizer=tf.keras.regularizers.l2(l2_value))(x)
+
+    outputs = tf.keras.layers.Dense(1)(x)
+
+    model = tf.keras.Model(inputs=inputs, outputs=outputs)
+    model.compile(optimizer="adam", loss="mse")
+
+    return model
+
+# ============================================================
+# L2 SCHEDULE
+# ============================================================
+
+L2_schedule = []
+L2_schedule += list(np.arange(10000e-5, 3000e-5 - 1e-12, -100e-5))
+L2_schedule += list(np.arange(2950e-5, 500e-5 - 1e-12, -50e-5))
+L2_schedule += list(np.arange(490e-5, 100e-5 - 1e-12, -10e-5))
+L2_schedule += list(np.arange(94e-5, 40e-5 - 1e-12, -3e-5))
+L2_schedule += list(np.arange(37e-5, 1e-5 - 1e-12, -0.5e-5))
+L2_schedule += list(np.arange(9e-6, 1e-6 - 1e-12, -4e-6))
+L2_schedule += list(np.arange(9e-7, 1e-7 - 1e-12, -4e-7))
+
+# ============================================================
+# TRAINING LOOP
+# ============================================================
+
+for step_index, current_l2 in enumerate(L2_schedule):
+
+    print(f"\nL2 STEP {step_index+1} | L2 = {current_l2:.8e}")
+
+    loss_threshold = 0.02 if current_l2 >= 2e-4 else 0.009
+
+    extreme_weight = 0.2 if current_l2 >= 2e-2 else 0.1
+    sample_weights = np.ones(len(delta_train))
+
+    mask = (delta_train < -2) | (delta_train > 2)
+    sample_weights[mask] = extreme_weight
+
+    model = build_ffnn(X_train.shape[1], current_l2)
+
+    previous_loss = None
+    small_change_count = 0
+    epoch_counter = 0
+
+    while epoch_counter < MAX_EPOCHS:
+
+        history = model.fit(
+            X_train,
+            delta_train,
+            sample_weight=sample_weights,
+            epochs=1,
+            batch_size=64,
+            verbose=0
+        )
+
+        current_loss = history.history["loss"][0]
+        epoch_counter += 1
+
+        if previous_loss is not None:
+            if abs(previous_loss - current_loss) < loss_threshold:
+                small_change_count += 1
+            else:
+                small_change_count = 0
+
+        previous_loss = current_loss
+
+        if small_change_count >= PLATEAU_EPOCHS:
+            break
+
+    print(f"Epochs used: {epoch_counter}")
+
+    f_train = model.predict(X_train, verbose=0).flatten()
+    f_test  = model.predict(X_test, verbose=0).flatten()
+
+    delta_train -= f_train
+    delta_test  -= f_test
+
+    train_rmse = sqrt(mean_squared_error(
+        np.zeros_like(delta_train),
+        delta_train
+    ))
+
+    test_rmse = sqrt(mean_squared_error(
+        np.zeros_like(delta_test),
+        delta_test
+    ))
+
+    print(f"Train RMSE: {train_rmse:.6f}")
+    print(f"Test  RMSE: {test_rmse:.6f}")
+
+    del model
+    tf.keras.backend.clear_session()
+    gc.collect()
+
+    if train_rmse <= 0.025:
+        print("*** TARGET TRAIN RMSE REACHED — STOPPING GROUP ***")
+        break
+
+# ============================================================
+# SAVE RESULT
+# ============================================================
+
+output_df = test_df[["Z","N","A"]].copy()
+output_df["deltaM"] = test_df["deltaM"]
+output_df["deltaMi_final"] = delta_test
+
+save_path = f"results_residual_ffnn_singlebin/Test_Group_{TEST_GROUP}_Final.xlsx"
+output_df.to_excel(save_path, index=False)
+
+
+print("\nGROUP COMPLETE.")
