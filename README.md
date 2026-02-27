@@ -26,10 +26,9 @@ This structured residual strategy forms the basis of an upcoming manuscript curr
 
 ## Contents
 
-- Main training implementation (.py file)
-- Sequential residual propagation logic
-- Regularization scheduling
-- Spectral analysis tools
+- Main training implementation-STEP_1 (.py files for FFNN, GNN(APPNP), MoE with the actual codes and .ipynb files to apply them on respective data files)
+- Input data used(.xlsx files)
+- Subsequent training implementation-STEP_2(.py files for FFNN, GNN(APPNP), MoE with the actual codes and .ipynb files to apply them on respective data files)
 
 ## Status
 
