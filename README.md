@@ -27,7 +27,7 @@ This structured residual strategy forms the basis of an upcoming manuscript curr
 ## Contents
 
 - Main training implementation-STEP_1 (.py files for FFNN, GNN(APPNP), MoE with the actual codes and .ipynb files to apply them on respective data files)
-- Input data used(.xlsx files)
+- Input data used(.xlsx files)(nuclei_all.xlsx is the file to be used as an input; it contains data related to Finite Range Droplet Model(FRDM))
 
 ## Status
 
