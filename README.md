@@ -28,6 +28,7 @@ This structured residual strategy forms the basis of an upcoming manuscript curr
 
 - Main training implementation-STEP_1 (.py files for FFNN, GNN(APPNP), MoE with the actual codes are in 'src' folder and .ipynb files to apply them on respective data files is in 'notebooks' folder)
 - Input data used(in 'data' folder)(nuclei_all.xlsx is the file to be used as an input; it contains data related to Finite Range Droplet Model(FRDM))
+- Final PINE Model by taking the weighted average of the 6 Models is given in the file PINE.xlsx (in 'data' folder)
 
 ## Status
 
